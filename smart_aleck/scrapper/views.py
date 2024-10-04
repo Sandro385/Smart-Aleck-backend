@@ -6,25 +6,24 @@ from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 import time
+from selenium.webdriver.common.by import By
+from bs4 import BeautifulSoup
 
-# Create your views here.
-# Create your views here.
+
 def scrap(request):
     # Open the webpage
     driver = open_webpage("https://matsne.gov.ge/en/document/search?page=1")  # Replace with your target URL
     
     # Wait for the page to load
     time.sleep(5)  # Adjust the sleep time as necessary
-
-    # Click on the fourth link in the panel heading
-    click_elements_in_sequence(driver)
     
     # Close the driver
     driver.quit()
     return HttpResponse("Scraping complete!")
 
+
 def open_webpage(url):
-    # Set up Chrome options
+    # Set up Chrome options (no headless mode since you want to see it working)
     options = Options()
     options.add_argument("--no-sandbox")  # Needed for some environments
     options.add_argument("--disable-dev-shm-usage")  # Overcome limited resource problems
@@ -36,33 +35,36 @@ def open_webpage(url):
     # Open the webpage
     driver.get(url)
     
+    links = driver.find_elements(By.CSS_SELECTOR, "div.panel-heading p a")
+    for i in range(0, min(1, len(links))):
+
+        links[i].click()
+        print(f"clicked on button number {i+1}")
+        scrape_page_data_with_bs4(driver.page_source)
+        time.sleep(20)
+        driver.find_element(By.CLASS_NAME, 'goback').click()
+        print("clicked back button")
+        
+        time.sleep(10)
+
+        links = driver.find_elements(By.CSS_SELECTOR, "div.panel-heading p a")
+    
     return driver
 
-def click_elements_in_sequence(driver):
+def scrape_page_data_with_bs4(page_source):
     try:
-        # Use a CSS selector to find all <a> elements within the specified structure
-        links = driver.find_elements(By.CSS_SELECTOR, "div.panel-heading p a")
-        
-        # Iterate through elements from the 4th to the 23rd (index 3 to 22)
-        for i in range(3, min(23, len(links))):
-            # Click the element
-            links[i].click()
-            print(f"Clicked on element {i+1}: {links[i].text}")
-            
-            # Wait 5 seconds after clicking
-            time.sleep(5)
-            
-            # Find the "Return back" button using its unique CSS selector and click it
-            return_back = driver.find_element(By.CSS_SELECTOR, "a.goback")
-            return_back.click()
-            
-            # Wait for the page to load after returning back
-            WebDriverWait(driver, 10).until(
-                EC.presence_of_element_located((By.CSS_SELECTOR, "div.panel-heading p a"))
-            )
-            
-            # Re-fetch the list of links (in case the page refreshes after navigation)
-            links = driver.find_elements(By.CSS_SELECTOR, "div.panel-heading p a")
+        # Parse the page source with BeautifulSoup
+        soup = BeautifulSoup(page_source, 'html.parser')
+
+        paragraphs = soup.find_all('p')
+        scraped_data = [p.get_text() for p in paragraphs if p.get_text()!="\n"]
+
+        # Print or return the scraped data
+        for i, text in enumerate(scraped_data):
+            print(text)
+
+        return scraped_data
     
     except Exception as e:
-        print(f"Error: {str(e)}")
+        print(f"Error occurred while scraping: {str(e)}")
+        return None
