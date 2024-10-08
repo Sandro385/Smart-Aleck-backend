@@ -16,6 +16,11 @@ from .models import Law
 from pinecone.grpc import PineconeGRPC as Pinecone
 from sentence_transformers import SentenceTransformer
 import torch
+from rest_framework.views import APIView
+from rest_framework.response import Response
+from rest_framework import status
+from openai import OpenAI
+from rest_framework.response import Response
 
 load_dotenv()
 
@@ -109,7 +114,7 @@ def scrape_page_data_with_bs4(page_source, registration_code, date_of_issue):
     
 
 def pine_upsert(request, chunk_size=10):
-    offset = 0
+    offset = 80
     while True:
         # Use LIMIT and OFFSET to fetch a chunk of 10 objects at a time
         laws = Law.objects.order_by('id')[offset:offset + chunk_size]
@@ -136,12 +141,13 @@ def pine_upsert(request, chunk_size=10):
             pc = Pinecone(api_key=os.getenv('PINECONE_API_KEY'))
             index = pc.Index(os.getenv('PINECONE_INDEX'))
             
-            vectors = [(f'chunk-{i}', embedding, {'text': chunk}) for i, (embedding, chunk) in enumerate(zip(chunk_embeddings, text_chunks))]
+            vectors = [(f'chunk-{i}', embedding, {'text': chunk, 'registration_code':str(law.registration_number)}) for i, (embedding, chunk) in enumerate(zip(chunk_embeddings, text_chunks))]
 
             batch_size = 200
             for vector_batch in batch_vectors(vectors, batch_size=batch_size):
                 try:
-                    index.upsert(vectors=vector_batch, namespace=str(law.registration_number))
+                    # index.upsert(vectors=vector_batch, namespace=str(law.registration_number))
+                    index.upsert(vectors=vector_batch, namespace="combined")
                     # logger.info(f"Uploaded batch of embeddings for file: {file_info.file_id}")
                 except Exception as e:
                     print(f"Error uploading batch: {str(e)}")
@@ -151,3 +157,68 @@ def pine_upsert(request, chunk_size=10):
         # Update offset to fetch the next batch of 10
         offset += chunk_size
     return HttpResponse("Done")
+
+
+class SimpleQueryAPI(APIView):
+
+    def post(self, request):
+        query = request.data.get('query')
+        # session_id = request.data.get('session_id')  # Uncomment if session_id is needed
+
+        if not query:
+            return Response({"error": "Query is required"}, status=status.HTTP_400_BAD_REQUEST)
+
+        # if session_id is None:  # Uncomment if session_id validation is needed
+            # return Response({"error": "Session ID is required"}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            response_text = self.get_response(query)
+            return Response({"response": response_text}, status=status.HTTP_200_OK)
+
+        except Exception as e:
+            return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+    def get_response(self, query):
+        """
+        Gets the response based on the user's query using embeddings and Pinecone.
+        """
+        try:
+            # Load the model
+            model = SentenceTransformer('all-distilroberta-v1')
+            device = torch.device('cpu')
+            model.to(device)
+            
+            # Step 1: Encode the query to get embeddings
+            chunk_embeddings = model.encode(query, convert_to_tensor=True)
+            
+            # Step 2: Initialize Pinecone and search for relevant embeddings
+            pc = Pinecone(api_key=os.getenv('PINECONE_API_KEY'))
+            index = pc.Index(os.getenv('PINECONE_INDEX'))
+            index_stats = index.describe_index_stats()
+
+            # namespace_stats = index_stats['namespaces'].get("combined", {})
+            # num_chunks_in_namespace = namespace_stats.get('vector_count', 0)
+            # top_k = min(10, num_chunks_in_namespace)
+
+            # Step 3: Perform a similarity search using cosine similarity
+            search_result = index.query(
+                vector=chunk_embeddings,
+                top_k=10,
+                include_values=False,
+                include_metadata=True,
+            )
+            
+            # print(search_result)
+            # Gather the full text from the search results
+            full_text = [
+            {
+                "registration_code": None,
+                "text": result['metadata']['text']
+            } 
+            for result in search_result['matches']
+        ]
+
+            return full_text  # Return the list of texts directly
+
+        except Exception as e:
+            raise Exception(f"Error in get_response: {str(e)}")  # Raise a new exception with a message

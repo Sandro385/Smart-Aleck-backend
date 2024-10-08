@@ -4,4 +4,5 @@ from scrapper import views
 urlpatterns = [
     path('scrap/', views.scrap, name="scrap"),
     path('upsert/', views.pine_upsert, name="vector upload"),
+    path('query/', views.SimpleQueryAPI.as_view(), name="vector query"),
 ]

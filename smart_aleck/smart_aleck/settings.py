@@ -42,6 +42,7 @@ INSTALLED_APPS = [
     'django.contrib.messages',
     'django.contrib.staticfiles',
     'scrapper',
+    'rest_framework',
 ]
 
 MIDDLEWARE = [
