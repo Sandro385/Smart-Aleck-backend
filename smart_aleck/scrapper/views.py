@@ -113,50 +113,73 @@ def scrape_page_data_with_bs4(page_source, registration_code, date_of_issue):
         return None
     
 
-def pine_upsert(request, chunk_size=10):
-    offset = 80
-    while True:
-        # Use LIMIT and OFFSET to fetch a chunk of 10 objects at a time
-        laws = Law.objects.order_by('id')[offset:offset + chunk_size]
+class PineUpsertAPI(APIView):
+    def post(self, request, chunk_size=10):
+        # Initialize model once
+        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        model = SentenceTransformer('hli/lstm-qqp-sentence-transformer')  # LSTM model you're using
+        model.to(device)
 
-        # If no laws are returned, break the loop
-        if not laws:
-            break
+        # Initialize Pinecone client and index
+        pc = Pinecone(api_key=os.getenv('PINECONE_API_KEY'))
+        index = pc.Index(os.getenv('PINECONE_INDEX'))
 
-        # Print each law object in the current chunk
-        for law in laws:
-            print(f"Law Name: {law.law_name}, Description: law.law_description, "
-                  f"Registration Number: {law.registration_number}, Created At: {law.created_at}")
-            print("-----------------------------------------------------------------------------")
-            
-            text_chunks=split_text(law.law_description)
-         
-            model = SentenceTransformer('all-distilroberta-v1')
-            device = torch.device('cpu')
-            model.to(device)
-            
-            chunk_embeddings = model.encode(text_chunks, convert_to_tensor=True)
-            
-            #upload embeddings with file_id to pinecone-db
-            pc = Pinecone(api_key=os.getenv('PINECONE_API_KEY'))
-            index = pc.Index(os.getenv('PINECONE_INDEX'))
-            
-            vectors = [(f'chunk-{i}', embedding, {'text': chunk, 'registration_code':str(law.registration_number)}) for i, (embedding, chunk) in enumerate(zip(chunk_embeddings, text_chunks))]
+        offset = 0
+        while True:
+            # Fetch a chunk of law objects at a time
+            laws = Law.objects.order_by('id')[offset:offset + chunk_size]
 
-            batch_size = 200
-            for vector_batch in batch_vectors(vectors, batch_size=batch_size):
+            # If no laws are returned, break the loop
+            if not laws:
+                break
+
+            # Process each law in the current chunk
+            for i, law in enumerate(laws):
+                print(f"Law Count: {i+1}")
+                print(f"Law ID: {law.id} | Law Name: {law.law_name} | Registration Number: {law.registration_number} | Created At: {law.created_at}")
+                print("-----------------------------------------------------------------------------")
+
+                # Split law description into chunks
+                text_chunks = split_text(law.law_description)
+
+                # Filter out empty chunks
+                text_chunks = [chunk for chunk in text_chunks if chunk.strip()]
+                if not text_chunks:
+                    print(f"No valid text chunks for law: {law.law_name} (ID: {law.id})")
+                    continue
+
                 try:
-                    # index.upsert(vectors=vector_batch, namespace=str(law.registration_number))
-                    index.upsert(vectors=vector_batch, namespace="combined")
-                    # logger.info(f"Uploaded batch of embeddings for file: {file_info.file_id}")
-                except Exception as e:
-                    print(f"Error uploading batch: {str(e)}")
-                    # logger.error(f"Error uploading batch embeddings for file {file_info.file_id}: {e}")
-                    raise
+                    # Generate embeddings for the valid chunks using the LSTM model
+                    chunk_embeddings = model.encode(text_chunks, convert_to_tensor=True)
+                    print(f"Encoding done for law ID: {law.id}, length of first embedding: {len(chunk_embeddings[0])}")
 
-        # Update offset to fetch the next batch of 10
-        offset += chunk_size
-    return HttpResponse("Done")
+                    # Prepare vectors for Pinecone
+                    vectors = [
+                        (f'chunk-{i}', embedding.cpu().numpy(), {'text': chunk, 'registration_code': str(law.registration_number)})
+                        for i, (embedding, chunk) in enumerate(zip(chunk_embeddings, text_chunks))
+                    ]
+                    print(f"Vectors prepared for law ID: {law.id}")
+
+                    # Upload vectors in batches
+                    batch_size = 200
+                    for vector_batch in batch_vectors(vectors, batch_size=batch_size):
+                        try:
+                            print(f"Starting upsert for law ID: {law.id}")
+                            index.upsert(vectors=vector_batch, namespace="combined")
+                            print(f"Upsert done for law ID: {law.id}")
+                        except Exception as e:
+                            print(f"Error uploading batch for law ID: {law.id}: {str(e)}")
+                            return Response({'error': str(e)}, status=500)
+
+                except RuntimeError as e:
+                    print(f"Error encoding text for law ID: {law.id}: {str(e)}")
+                    return Response({'error': str(e)}, status=500)
+
+            # Update offset to fetch the next batch of laws
+            offset += chunk_size
+
+        return Response({"message": "Data uploaded to Pinecone successfully!"}, status=200)
+
 
 
 class SimpleQueryAPI(APIView):
@@ -184,7 +207,7 @@ class SimpleQueryAPI(APIView):
         """
         try:
             # Load the model
-            model = SentenceTransformer('all-distilroberta-v1')
+            model = SentenceTransformer('hli/lstm-qqp-sentence-transformer')
             device = torch.device('cpu')
             model.to(device)
             
@@ -206,6 +229,7 @@ class SimpleQueryAPI(APIView):
                 top_k=10,
                 include_values=False,
                 include_metadata=True,
+                namespace="combined"
             )
             
             # print(search_result)
