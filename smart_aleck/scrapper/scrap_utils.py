@@ -1,6 +1,6 @@
 from datetime import datetime
-import re
-from .models import Law
+import re, unicodedata
+from .models import LawE, LawG
 from django.http import JsonResponse
 from django.utils import timezone
 
@@ -8,7 +8,7 @@ def save_data(scraped_data):
     try:
         created_at = timezone.make_aware(datetime.strptime(scraped_data["created_at"], '%d/%m/%Y'))
         # Create and save the Law instance
-        law = Law(
+        law = LawG(
             law_name = scraped_data["law_name"],
             law_description = scraped_data["law_description"],
             registration_number = scraped_data["registration_number"],
@@ -21,7 +21,7 @@ def save_data(scraped_data):
         print("Error : ",e)
         return JsonResponse({"success": False, "message": str(e)}, status=400)
 
-def split_text(text, chunk_size=512):
+def split_text(text, chunk_size=2048):
     """
     Splits the text into chunks of a specified size for creating embeddings.
     Adjust the chunk_size based on your data.
@@ -45,3 +45,30 @@ def split_text(text, chunk_size=512):
 def batch_vectors(vectors, batch_size=100):
     for i in range(0, len(vectors), batch_size):
         yield vectors[i:i+batch_size]
+
+
+def clean_parsed_data(data):
+    """
+    Cleans the parsed HTML data by removing unnecessary characters, newlines, tabs,
+    and normalizing the text. Keeps Georgian characters and single newlines.
+    
+    Parameters:
+    data (str): The raw text extracted from the parsed HTML.
+    
+    Returns:
+    str: Cleaned text with single newlines between paragraphs.
+    """
+    # 1. Replace multiple newlines with a single newline
+    cleaned_data = re.sub(r'\n+', '\n', data)  # Replace multiple newlines with a single newline
+    
+    # 2. Remove unnecessary tabs and spaces around the newlines
+    cleaned_data = re.sub(r'[ \t]+', ' ', cleaned_data)  # Replace multiple spaces/tabs with a single space
+    cleaned_data = re.sub(r' *\n *', '\n', cleaned_data)  # Clean spaces around newlines
+    
+    # 3. Normalize Unicode characters but keep Georgian text and other non-ASCII
+    cleaned_data = unicodedata.normalize('NFKC', cleaned_data)  # Normalize characters without removing non-ASCII ones
+    
+    # 4. Optionally, remove unwanted punctuation or symbols (customizable)
+    cleaned_data = re.sub(r'[^\w\s,.!?\'-Ⴀ-ჿ]', '', cleaned_data)  # Allow Georgian Unicode range (U+10A0 to U+10FF)
+
+    return cleaned_data
