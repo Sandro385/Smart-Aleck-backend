@@ -10,7 +10,7 @@ import time, os
 from dotenv import load_dotenv
 from selenium.webdriver.common.by import By
 from bs4 import BeautifulSoup
-from .scrap_utils import save_data, split_text, batch_vectors, clean_parsed_data
+from .scrap_utils import save_data, split_text, batch_vectors, clean_parsed_data, refine_text_openai
 from pinecone.grpc import PineconeGRPC as Pinecone
 from sentence_transformers import SentenceTransformer
 import torch
@@ -22,6 +22,7 @@ from rest_framework.response import Response
 from rest_framework.decorators import api_view
 from django.http import JsonResponse
 from .models import LawG
+import tiktoken
 
 
 load_dotenv()
@@ -140,19 +141,21 @@ def scrape_page_data_with_bs4(page_source, registration_code, date_of_issue):
     
 
 class PineUpsertAPI(APIView):
-    def post(self, request, chunk_size=10):
-        # Initialize model once
-        # device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-        # model = SentenceTransformer("distilbert-base-multilingual-cased")  # LSTM model you're using
-        # model.to(device)
-
+    def post(self, request, chunk_size=100):
         client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
         # Initialize Pinecone client and index
         pc = Pinecone(api_key=os.getenv('PINECONE_API_KEY'))
         index = pc.Index(os.getenv('PINECONE_INDEX'))
 
+        # Tokenizer for OpenAI embeddings
+        tokenizer = tiktoken.get_encoding("cl100k_base")
+
+        # Define the maximum token limit for each chunk
+        max_tokens_per_chunk = 4000  # Keeping it under the 8192 token limit
+
         offset = 0
+        counter = 1
         while True:
             # Fetch a chunk of law objects at a time
             laws = LawG.objects.order_by('registration_number')[offset:offset + chunk_size]
@@ -161,53 +164,73 @@ class PineUpsertAPI(APIView):
             if not laws:
                 break
 
+            # Determine the namespace based on the current offset
+            start_range = offset + 1
+            end_range = offset + chunk_size
+            namespace = f"{start_range}_{end_range}"
+
             # Process each law in the current chunk
-            for i, law in enumerate(laws):
-                print(f"Law Count: {i+1}")
+            for law in laws:
+                print(f"Law Count: {counter}")
+                counter += 1
                 print(f"Law Name: {law.law_name} | Registration Number: {law.registration_number} | Created At: {law.created_at}")
                 print("-----------------------------------------------------------------------------")
 
-                # Split law description into chunks
-                text_chunks = split_text(law.law_description)
+                # Split law description into chunks based on token count
+                text_chunks = split_text_by_tokens(law.law_description, max_tokens=max_tokens_per_chunk, tokenizer=tokenizer)
 
                 # Filter out empty chunks
                 text_chunks = [chunk for chunk in text_chunks if chunk.strip()]
                 if not text_chunks:
-                    print(f"No valid text chunks for law: {law.law_name})")
+                    print(f"No valid text chunks for law: {law.law_name}")
                     continue
 
                 try:
-                    # Generate embeddings for the valid chunks using the LSTM model
-                    response = client.embeddings.create(input=text_chunks, model="text-embedding-3-large")
-                    chunk_embeddings = [item.embedding for item in response.data]
-                    print(f"length of first embedding: {len(chunk_embeddings[0])}")
+                    # Generate embeddings for the valid chunks
+                    chunk_embeddings = []
+
+                    for chunk in text_chunks:
+                        if chunk.strip():
+                            # Create embedding for the current chunk
+                            response = client.embeddings.create(input=[chunk], model="text-embedding-ada-002")
+                            chunk_embeddings.append(response.data[0].embedding)
 
                     # Prepare vectors for Pinecone
                     vectors = [
                         (f'chunk-{i}', embedding, {'text': chunk, 'registration_code': str(law.registration_number)})
                         for i, (embedding, chunk) in enumerate(zip(chunk_embeddings, text_chunks))
                     ]
-                    
 
                     # Upload vectors in batches
                     batch_size = 200
                     for vector_batch in batch_vectors(vectors, batch_size=batch_size):
                         try:
-                            # print(f"Starting upsert for law ID: {law.id}")
-                            index.upsert(vectors=vector_batch, namespace=law.registration_number)
-                            # print(f"Upsert done for law ID: {law.id}")
+                            index.upsert(vectors=vector_batch, namespace=namespace)
                         except Exception as e:
-                            # print(f"Error uploading batch for law ID: {law.id}: {str(e)}")
                             return Response({'error': str(e)}, status=500)
 
                 except RuntimeError as e:
-                    # print(f"Error encoding text for law ID: {law.id}: {str(e)}")
                     return Response({'error': str(e)}, status=500)
 
             # Update offset to fetch the next batch of laws
             offset += chunk_size
 
         return Response({"message": "Data uploaded to Pinecone successfully!"}, status=200)
+
+# Helper function to split text based on token count
+def split_text_by_tokens(text, max_tokens, tokenizer):
+    tokens = tokenizer.encode(text)
+    chunks = []
+    for i in range(0, len(tokens), max_tokens):
+        chunk_tokens = tokens[i:i + max_tokens]
+        chunk_text = tokenizer.decode(chunk_tokens)
+        chunks.append(chunk_text)
+    return chunks
+
+# Helper function to batch vectors for upsert
+def batch_vectors(vectors, batch_size):
+    for i in range(0, len(vectors), batch_size):
+        yield vectors[i:i + batch_size]
 
 
 
@@ -242,7 +265,7 @@ class SimpleQueryAPI(APIView):
             
             # Step 1: Encode the query to get embeddings
             client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-            chunk_embeddings = client.embeddings.create(input=query, model="text-embedding-3-large").data[0].embedding
+            chunk_embeddings = client.embeddings.create(input=query, model="text-embedding-ada-002").data[0].embedding
             
             # Step 2: Initialize Pinecone and search for relevant embeddings
             pc = Pinecone(api_key=os.getenv('PINECONE_API_KEY'))
@@ -267,11 +290,11 @@ class SimpleQueryAPI(APIView):
                 except Exception as e:
                     print(f"Skipping namespace {namespace} due to error: {str(e)}")
 
-            # print(search_results)
+            print(search_results)
 
             # Filter results based on the threshold
             filtered_results = []
-            similarity_threshold=0.4
+            similarity_threshold=0.85
 
             # Loop through search_results to check scores and store texts with their scores
             for object in search_results:
@@ -285,9 +308,14 @@ class SimpleQueryAPI(APIView):
                             filtered_results.append({'text': text, 'score': score})
 
             print(len(filtered_results))
-            # print(filtered_results)
             filtered_results.sort(key=lambda x: x['score'], reverse=True)
-            return filtered_results  # Return the list of texts directly
+            
+            full_text = [item['text'] for item in filtered_results]
+            print("full text : ", len(full_text))
+
+            refined_response=refine_text_openai(chunks=full_text[:10] if len(full_text)>=10 else full_text, query=query)
+
+            return refined_response  # Return the list of texts directly
 
         except Exception as e:
             raise Exception(f"Error in get_response: {str(e)}")  # Raise a new exception with a message
