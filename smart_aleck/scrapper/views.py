@@ -23,6 +23,7 @@ from rest_framework.decorators import api_view
 from django.http import JsonResponse
 from .models import LawG
 import tiktoken
+from .assistant import assistant_get_response
 
 
 load_dotenv()
@@ -319,3 +320,34 @@ class SimpleQueryAPI(APIView):
 
         except Exception as e:
             raise Exception(f"Error in get_response: {str(e)}")  # Raise a new exception with a message
+
+
+class AssistantAPI(APIView):
+    def post(self, request):
+        query = request.data.get('query')
+        query_q = request.data.get('query_q')
+        file_ids = request.data.get('file_ids')
+        
+        if not query:
+            return Response({"error": "Query is required"}, status=status.HTTP_400_BAD_REQUEST)
+        
+        try:
+            client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+            thread = client.beta.threads.create()
+            thread_id = thread.id
+            
+            response_data, response_type = assistant_get_response(
+                thread_id=thread_id,
+                query_input=query,
+                query_q=query_q,
+                file_ids=file_ids
+            )
+            
+            return Response({
+                "response": response_data[0],
+                "cost": response_data[1],
+                "type": response_type
+            }, status=status.HTTP_200_OK)
+            
+        except Exception as e:
+            return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
