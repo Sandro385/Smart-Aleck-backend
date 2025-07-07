@@ -1,0 +1,9 @@
+stages:
+  - deploy
+
+deploy_production:
+  stage: deploy
+  script:
+    - ssh $SSH_USER@$SSH_HOST "cd /var/www/smart-backend && git pull"
+  only:
+    - master
