@@ -6,23 +6,29 @@ on:
 
 jobs:
   deploy:
+    name: Deploy to Elastic Beanstalk
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout code
+      # 1️⃣ კოდის ჩამოტვირთვა
+      - name: Checkout repository
         uses: actions/checkout@v4
 
+      # 2️⃣ (სურვილისამებრ) AWS-CLI-ს დასაკონფიგურირებლად
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-access-key-id:     ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ secrets.AWS_REGION }}
+          aws-region:            ${{ secrets.AWS_REGION }}
 
-      - name: Deploy to Elastic Beanstalk
+      # 3️⃣ რეალური დეფლოი Beanstalk-ზე
+      - name: Deploy via Beanstalk action
         uses: einaregilsson/beanstalk-deploy@v21
         with:
-          application_name: Smart-Aleck-backend
-          environment_name: Smart-Aleck-backend-env
-          version_label: ${{ github.sha }}
-          region: ${{ secrets.AWS_REGION }}
+          aws_access_key:        ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws_secret_key:        ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          application_name:      Smart-Aleck-backend
+          environment_name:      Smart-Aleck-backend-env
+          version_label:         ${{ github.sha }}
+          region:                ${{ secrets.AWS_REGION }}
