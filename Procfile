@@ -1,1 +1,1 @@
-web: gunicorn smart_aleck_backend.wsgi:application
+web: gunicorn smart_aleck.wsgi:application
