@@ -2,33 +2,36 @@ name: Deploy to AWS EB
 
 on:
   push:
-    branches: [ master ]
+    branches: [ master ]   # გაიშვება master-ზე push შემდეგ
 
 jobs:
   deploy:
-    name: Deploy to Elastic Beanstalk
     runs-on: ubuntu-latest
 
     steps:
-      # 1️⃣ კოდის ჩამოტვირთვა
-      - name: Checkout repository
+      # 1. კოდის ამოღება
+      - name: Checkout code
         uses: actions/checkout@v4
 
-      # 2️⃣ (სურვილისამებრ) AWS-CLI-ს დასაკონფიგურირებლად
+      # 2. AWS საკა­რე­დიტო­ების კონფიგურაცია (Secrets-იდან)
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          aws-access-key-id:     ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region:            ${{ secrets.AWS_REGION }}
+          aws-region: ${{ secrets.AWS_REGION }}
 
-      # 3️⃣ რეალური დეფლოი Beanstalk-ზე
-      - name: Deploy via Beanstalk action
+      # 3. პროექტის შეფუთვა zip-ში
+      - name: Create deploy bundle
+        run: |
+          zip -rq deploy.zip .
+
+      # 4. ატვირთვა Elastic Beanstalk-ზე
+      - name: Deploy to Elastic Beanstalk
         uses: einaregilsson/beanstalk-deploy@v21
         with:
-          aws_access_key:        ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws_secret_key:        ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          application_name:      Smart-Aleck-backend
-          environment_name:      Smart-Aleck-backend-env
-          version_label:         ${{ github.sha }}
-          region:                ${{ secrets.AWS_REGION }}
+          application_name: Smart-Aleck-backend
+          environment_name: Smart-Aleck-backend-env
+          version_label: ${{ github.sha }}
+          region: ${{ secrets.AWS_REGION }}
+          deployment_package: deploy.zip   # სწორედ ეს zip გაეშვება
