@@ -3,23 +3,16 @@ name: Deploy to AWS EB
 on:
   push:
     branches:
-      - master          # გაუშვი მხოლოდ master-ზე push-ისას
+      - master
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
 
-    # (რჩევა) თუ მომავალში OIDC-ით ისარგებლებთ, permissions საჭირო იქნება
-    # permissions:
-    #   id-token: write
-    #   contents: read
-
     steps:
-      # 1) კოდის ამოღება
       - name: Checkout code
         uses: actions/checkout@v4
 
-      # 2) AWS-ის გასაღებების კონფიგურაცია (Secrets-იდან)
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -27,11 +20,9 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ secrets.AWS_REGION }}
 
-      # 3) პროექტის ZIP-ად შეფუთვა
       - name: Create deploy bundle
         run: zip -rq deploy.zip .
 
-      # 4) ატვირთვა Elastic Beanstalk-ზე
       - name: Deploy to Elastic Beanstalk
         uses: einaregilsson/beanstalk-deploy@v21
         with:
@@ -40,5 +31,6 @@ jobs:
           version_label: ${{ github.sha }}
           region: ${{ secrets.AWS_REGION }}
           deployment_package: deploy.zip
-          aws_access_key: ${{ secrets.AWS_ACCESS_KEY_ID }}      # აუცილებელი პარამეტრი
-          aws_secret_key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}  # აუცილებელი პარამეტრი
+          use_existing_version_if_available: true   # ← ეს ხაზი ამატებს
+          aws_access_key: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws_secret_key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
